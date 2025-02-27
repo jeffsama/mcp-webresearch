@@ -26,8 +26,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-// Initialize temp directory for screenshots
-const SCREENSHOTS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-screenshots-'));
+// Create a fixed screenshots directory, either from environment variable or in user's home
+const SCREENSHOTS_DIR = process.env.MCP_SCREENSHOTS_DIR || path.join(os.homedir(), '.mcp-screenshots');
+// Create the directory if it doesn't exist
+if (!fs.existsSync(SCREENSHOTS_DIR)) {
+    fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+}
+
+console.log(`Screenshots will be saved to: ${SCREENSHOTS_DIR}`);
 
 // Initialize Turndown service for converting HTML to Markdown
 // Configure with specific formatting preferences
@@ -120,9 +126,8 @@ async function cleanupScreenshots(): Promise<void> {
         await Promise.all(files.map(file =>
             fs.promises.unlink(path.join(SCREENSHOTS_DIR, file))
         ));
-
-        // Remove the directory itself
-        await fs.promises.rmdir(SCREENSHOTS_DIR);
+        
+        // Don't remove the directory itself since it's now a permanent directory
     } catch (error) {
         console.error('Error cleaning up screenshots:', error);
     }
