@@ -1,5 +1,18 @@
 #!/usr/bin/env node
 
+// Add dotenv to load environment variables from .env file
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+// Get the directory where the script is located
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Load environment variables from .env file
+// This will look for .env in the script directory, not the current working directory
+dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+
 // Core dependencies for MCP server and protocol handling
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -23,8 +36,16 @@ import { chromium, Browser, Page } from 'playwright';
 import TurndownService from "turndown";
 import type { Node } from "turndown";
 import * as fs from 'fs';
-import * as path from 'path';
 import * as os from 'os';
+
+// Add process ID information
+console.log(`MCP Web Research server starting - PID: ${process.pid}`);
+console.log(`Working directory: ${process.cwd()}`);
+console.log(`Node version: ${process.version}`);
+
+// Configuration flag for Claude Desktop integration
+const CLAUDE_DESKTOP_AVAILABLE = process.env.CLAUDE_DESKTOP_AVAILABLE === 'true';
+console.log(`Claude Desktop integration: ${CLAUDE_DESKTOP_AVAILABLE ? 'ENABLED' : 'DISABLED'}`);
 
 // Create a fixed screenshots directory, either from environment variable or in user's home
 const SCREENSHOTS_DIR = process.env.MCP_SCREENSHOTS_DIR || path.join(os.homedir(), '.mcp-screenshots');
@@ -34,6 +55,15 @@ if (!fs.existsSync(SCREENSHOTS_DIR)) {
 }
 
 console.log(`Screenshots will be saved to: ${SCREENSHOTS_DIR}`);
+// Test file system access
+try {
+    const testFile = path.join(SCREENSHOTS_DIR, `access-test-${Date.now()}.txt`);
+    fs.writeFileSync(testFile, 'Testing write access');
+    fs.unlinkSync(testFile);
+    console.log(`Successfully verified write access to ${SCREENSHOTS_DIR}`);
+} catch (error) {
+    console.error(`ERROR: Cannot write to screenshot directory: ${error}`);
+}
 
 // Initialize Turndown service for converting HTML to Markdown
 // Configure with specific formatting preferences
@@ -93,12 +123,16 @@ interface ResearchSession {
 
 // Screenshot management functions
 async function saveScreenshot(screenshot: string, title: string): Promise<string> {
+    console.log(`saveScreenshot called with title: ${title}`);
+    
     // Convert screenshot from base64 to buffer
     const buffer = Buffer.from(screenshot, 'base64');
+    console.log(`Screenshot converted to buffer, size: ${Math.round(buffer.length / 1024)}KB`);
 
     // Check size before saving
     const MAX_SIZE = 5 * 1024 * 1024;  // 5MB
     if (buffer.length > MAX_SIZE) {
+        console.error(`Screenshot too large: ${Math.round(buffer.length / (1024 * 1024))}MB exceeds ${MAX_SIZE / (1024 * 1024)}MB limit`);
         throw new McpError(
             ErrorCode.InvalidRequest,
             `Screenshot too large: ${Math.round(buffer.length / (1024 * 1024))}MB exceeds ${MAX_SIZE / (1024 * 1024)}MB limit`
@@ -110,12 +144,24 @@ async function saveScreenshot(screenshot: string, title: string): Promise<string
     const safeTitle = title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const filename = `${safeTitle}-${timestamp}.png`;
     const filepath = path.join(SCREENSHOTS_DIR, filename);
+    console.log(`Saving screenshot to: ${filepath}`);
 
-    // Save the validated screenshot
-    await fs.promises.writeFile(filepath, buffer);
-
-    // Return the filepath to the saved screenshot
-    return filepath;
+    try {
+        // Save the validated screenshot
+        await fs.promises.writeFile(filepath, buffer);
+        console.log(`Screenshot saved successfully to: ${filepath}`);
+        
+        // Verify file exists
+        const fileExists = fs.existsSync(filepath);
+        const fileSize = fileExists ? fs.statSync(filepath).size : 0;
+        console.log(`File exists: ${fileExists}, size: ${Math.round(fileSize / 1024)}KB`);
+        
+        // Return the filepath to the saved screenshot
+        return filepath;
+    } catch (error) {
+        console.error(`Error saving screenshot: ${error}`);
+        throw error;
+    }
 }
 
 // Cleanup function to remove all screenshots from disk
@@ -135,29 +181,29 @@ async function cleanupScreenshots(): Promise<void> {
 
 // Available tools for web research functionality
 const TOOLS: Tool[] = [
-    {
-        name: "search_google",
-        description: "Search Google for a query",
-        inputSchema: {
-            type: "object",
-            properties: {
-                query: { type: "string", description: "Search query" },
-            },
-            required: ["query"],
-        },
-    },
-    {
-        name: "visit_page",
-        description: "Visit a webpage and extract its content",
-        inputSchema: {
-            type: "object",
-            properties: {
-                url: { type: "string", description: "URL to visit" },
-                takeScreenshot: { type: "boolean", description: "Whether to take a screenshot" },
-            },
-            required: ["url"],
-        },
-    },
+    // {
+    //     name: "search_google",
+    //     description: "Search Google for a query",
+    //     inputSchema: {
+    //         type: "object",
+    //         properties: {
+    //             query: { type: "string", description: "Search query" },
+    //         },
+    //         required: ["query"],
+    //     },
+    // },
+    // {
+    //     name: "visit_page",
+    //     description: "Visit a webpage and extract its content",
+    //     inputSchema: {
+    //         type: "object",
+    //         properties: {
+    //             url: { type: "string", description: "URL to visit" },
+    //             takeScreenshot: { type: "boolean", description: "Whether to take a screenshot" },
+    //         },
+    //         required: ["url"],
+    //     },
+    // },
     {
         name: "take_screenshot",
         description: "Take a screenshot of the current page",
@@ -482,6 +528,7 @@ async function safePageNavigation(page: Page, url: string): Promise<void> {
 
 // Take and optimize a screenshot
 async function takeScreenshotWithSizeLimit(page: Page): Promise<string> {
+    console.log("takeScreenshotWithSizeLimit called");
     const MAX_SIZE = 5 * 1024 * 1024;
     const MAX_DIMENSION = 1920;
     const MIN_DIMENSION = 800;
@@ -491,12 +538,15 @@ async function takeScreenshotWithSizeLimit(page: Page): Promise<string> {
         width: 1600,
         height: 900
     });
+    console.log("Viewport size set");
 
     // Take initial screenshot
+    console.log("Taking screenshot...");
     let screenshot = await page.screenshot({
         type: 'png',
         fullPage: false
     });
+    console.log(`Initial screenshot taken, size: ${Math.round(screenshot.length / 1024)}KB`);
 
     // Handle buffer conversion
     let buffer = screenshot;
@@ -574,9 +624,13 @@ const server: Server = new Server(
     },
     {
         capabilities: {
-            tools: {},      // Available tool configurations
-            resources: {},  // Resource handling capabilities
-            prompts: {}     // Prompt processing capabilities
+            tools: {},              // Available tool configurations
+            resources: {},          // Resource handling capabilities
+            prompts: {},            // Prompt processing capabilities
+            claudeDesktop: {        // Claude Desktop integration status
+                available: CLAUDE_DESKTOP_AVAILABLE,
+                screenshotsDir: SCREENSHOTS_DIR
+            }
         },
     }
 );
@@ -643,7 +697,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
                         title: r.title,
                         url: r.url,
                         timestamp: r.timestamp,
-                        screenshotPath: r.screenshotPath
+                        screenshotPath: r.screenshotPath,
+                        claudeDesktopAvailable: CLAUDE_DESKTOP_AVAILABLE
                     }))
                 }, null, 2)
             }]
@@ -1010,10 +1065,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolRes
 
                     // Step 5: Take screenshot if requested
                     let screenshotUri: string | undefined;
+                    let filePath: string | undefined;
                     if (takeScreenshot) {
                         // Capture and process screenshot
                         const screenshot = await takeScreenshotWithSizeLimit(page);
                         pageResult.screenshotPath = await saveScreenshot(screenshot, title);
+                        filePath = pageResult.screenshotPath;
 
                         // Get the index for the resource URI
                         const resultIndex = currentSession ? currentSession.results.length : 0;
@@ -1027,10 +1084,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolRes
 
                     // Step 6: Store result in session
                     addResult(pageResult);
-                    return { pageResult, screenshotUri };
+                    return { pageResult, screenshotUri, filePath };
                 });
 
-                // Step 7: Return formatted result with screenshot URI if taken
+                // Step 7: Prepare screenshot message based on Claude Desktop availability
+                let screenshotMessage = "";
+                if (result.screenshotUri) {
+                    screenshotMessage = CLAUDE_DESKTOP_AVAILABLE
+                        ? `View screenshot via *MCP Resources* (Paperclip icon) @ URI: ${result.screenshotUri}`
+                        : `Screenshot saved to: ${result.filePath}\nNote: Claude Desktop is not available, so this screenshot won't be visible in Claude's interface.`;
+                }
+
+                // Return formatted result with screenshot URI if taken
                 const response: ToolResult = {
                     content: [{
                         type: "text" as const,
@@ -1039,7 +1104,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolRes
                             title: result.pageResult.title,
                             content: result.pageResult.content,
                             timestamp: result.pageResult.timestamp,
-                            screenshot: result.screenshotUri ? `View screenshot via *MCP Resources* (Paperclip icon) @ URI: ${result.screenshotUri}` : undefined
+                            screenshot: result.screenshotUri ? screenshotMessage : undefined
                         }, null, 2)
                     }]
                 };
@@ -1099,10 +1164,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request): Promise<ToolRes
 
                 // Step 7: Return success message with resource URI
                 const resourceUri = `research://screenshots/${resultIndex}`;
+                
+                // Different messages based on Claude Desktop availability
+                let successMessage = CLAUDE_DESKTOP_AVAILABLE 
+                    ? `Screenshot taken successfully. You can view it via *MCP Resources* (Paperclip icon) @ URI: ${resourceUri}`
+                    : `Screenshot taken successfully and saved to: ${screenshotPath}\n\nNote: Claude Desktop is not available, so this screenshot won't be visible in Claude's interface. To access it, open the file directly.`;
+                
                 return {
                     content: [{
                         type: "text" as const,
-                        text: `Screenshot taken successfully. You can view it via *MCP Resources* (Paperclip icon) @ URI: ${resourceUri}`
+                        text: successMessage
                     }]
                 };
             } catch (error) {
